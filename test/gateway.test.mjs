@@ -61,9 +61,11 @@ async function startStub(options = {}) {
   }
 }
 
+// Empty config env keeps a developer's exported AGENTARTS_MEMORY_* out of the
+// assertions; the gateway env below carries only the API key.
 const gatewayFor = (url, overrides = {}, env = { STUB_KEY: 'stub-key' }) =>
   new MemoryGateway(
-    resolveConfig({ spaceId: 'space-1', apiKeyEnv: 'STUB_KEY', endpoint: url, ...overrides }),
+    resolveConfig({ spaceId: 'space-1', apiKeyEnv: 'STUB_KEY', endpoint: url, ...overrides }, {}),
     env,
   )
 
@@ -134,6 +136,21 @@ test('normalizeSearchResponse accepts records and results envelopes', () => {
   assert.equal(normalizeSearchResponse(undefined).length, 0)
   // Entries without text are dropped rather than surfaced as empty memories.
   assert.equal(normalizeSearchResponse({ results: [{ record: { id: 'x' }, score: 0.9 }] }).length, 0)
+})
+
+test('AGENTARTS_MEMORY_RERANK=0 turns reranking off in the search body', async () => {
+  const stub = await startStub()
+  try {
+    const config = resolveConfig(
+      { spaceId: 'space-1', apiKeyEnv: 'STUB_KEY', endpoint: stub.url },
+      { AGENTARTS_MEMORY_RERANK: '0' },
+    )
+    const gateway = new MemoryGateway(config, { STUB_KEY: 'stub-key' })
+    await gateway.search('q')
+    assert.equal(stub.requests[0].body.rerank, false)
+  } finally {
+    await stub.close()
+  }
 })
 
 test('search sends the Bearer header and the expected body', async () => {
@@ -289,10 +306,10 @@ test('an empty API key is reported before any request', async () => {
 })
 
 test('an empty space id is reported separately from a missing key', async () => {
-  const gateway = new MemoryGateway(resolveConfig({ endpoint: 'http://127.0.0.1:1' }), { STUB_KEY: 'k' })
+  const gateway = new MemoryGateway(resolveConfig({ endpoint: 'http://127.0.0.1:1' }, {}), { STUB_KEY: 'k' })
   await assert.rejects(gateway.search('q'), (error) => {
     assert.equal(error.code, 'unconfigured')
-    assert.match(error.message, /spaceId/)
+    assert.match(error.message, /AGENTARTS_MEMORY_SPACE_ID/)
     return true
   })
 })

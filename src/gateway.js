@@ -70,7 +70,7 @@ export function resolveBaseUrl(config, env = process.env) {
  * Build the search request body. Field names and the always-present
  * `only_actived` / `rerank` pair mirror the SDK's `MemorySearchFilter`.
  *
- * @param {{query: string, topK?: number, minScore?: number, strategyType?: string, actorId?: string, assistantId?: string}} options
+ * @param {{query: string, topK?: number, minScore?: number, strategyType?: string, actorId?: string, assistantId?: string, rerank?: boolean}} options
  * @returns {Record<string, unknown>}
  */
 export function buildSearchBody(options) {
@@ -82,7 +82,8 @@ export function buildSearchBody(options) {
   if (options.topK !== undefined) body.top_k = options.topK
   if (options.minScore !== undefined) body.min_score = options.minScore
   body.only_actived = false
-  body.rerank = true
+  // Operator-controlled via AGENTARTS_MEMORY_RERANK; the backend default is on.
+  body.rerank = options.rerank === undefined ? true : options.rerank
   return body
 }
 
@@ -233,7 +234,7 @@ export class MemoryGateway {
   /** The space path prefix every call uses. */
   #spacePath() {
     const spaceId = String(this.#config.spaceId ?? '').trim()
-    if (spaceId === '') throw new GatewayError('unconfigured', 'spaceId is not set')
+    if (spaceId === '') throw new GatewayError('unconfigured', 'space id is not set (AGENTARTS_MEMORY_SPACE_ID)')
     return `/v1/core/spaces/${encodeURIComponent(spaceId)}`
   }
 
@@ -252,6 +253,7 @@ export class MemoryGateway {
       strategyType: options.strategyType,
       actorId: this.#config.actorId,
       assistantId: this.#config.assistantId,
+      rerank: this.#config.rerank,
     })
     const payload = await this.request('POST', `${this.#spacePath()}/memories/search`, {
       body,

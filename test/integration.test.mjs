@@ -73,17 +73,19 @@ function makeCtx() {
 
 const userMessage = (text) => ({ content: [{ type: 'text', text }] })
 
+// Pass an empty env so an exported AGENTARTS_MEMORY_* on the developer's machine
+// cannot leak into these assertions.
 const CONFIGURED = (url, overrides = {}) => resolveConfig({
   enabled: true,
   spaceId: 'space-1',
   apiKeyEnv: 'STUB_MEMORY_KEY',
   endpoint: url,
   ...overrides,
-})
+}, {})
 
 test('the master switch registers nothing at all', () => {
   const { ctx, log } = makeCtx()
-  apply(ctx, resolveConfig({ enabled: false, spaceId: 'space-1' }))
+  apply(ctx, resolveConfig({ enabled: false, spaceId: 'space-1' }, {}))
   assert.deepEqual(
     { tools: log.tools.length, listeners: log.listeners.length, sections: log.sections.length, commands: log.commands.length, effects: log.effects.length },
     { tools: 0, listeners: 0, sections: 0, commands: 0, effects: 0 },
@@ -92,10 +94,36 @@ test('the master switch registers nothing at all', () => {
 
 test('an unconfigured plugin stays mounted but offers no tools', () => {
   const { ctx, log } = makeCtx()
-  apply(ctx, resolveConfig({ enabled: true }))
+  apply(ctx, resolveConfig({ enabled: true }, {}))
   assert.equal(log.tools.length, 0, 'no tool that cannot work')
   assert.equal(log.commands.length, 1, 'status command remains available')
   assert.deepEqual(log.listeners.map((listener) => listener.name), ['agent/pre-step'])
+})
+
+test('an environment-only deployment is ready and reaches the stub', async () => {
+  process.env.STUB_MEMORY_KEY = 'stub-key'
+  process.env.AGENTARTS_MEMORY_SPACE_ID = 'space-from-env'
+  const stub = await startStub()
+  process.env.AGENTARTS_MEMORY_DATA_ENDPOINT = stub.url
+  try {
+    const { ctx, log } = makeCtx()
+    // No config at all beyond the apiKeyEnv: the hosted contract is env-only.
+    apply(ctx, resolveConfig({ apiKeyEnv: 'STUB_MEMORY_KEY', recall: { enabled: false } }))
+
+    const status = await log.commands[0].handler({ rawInput: '' })
+    assert.match(status.text, /status: ready/)
+    assert.match(status.text, /space-from-env/)
+
+    const search = log.tools.find((tool) => tool.name === 'huawei_memory_search')
+    assert.ok(search, 'tools are registered when env supplies space + key')
+    await search.execute({ query: 'q' })
+    assert.equal(stub.requests[0].url, '/v1/core/spaces/space-from-env/memories/search')
+  } finally {
+    delete process.env.STUB_MEMORY_KEY
+    delete process.env.AGENTARTS_MEMORY_SPACE_ID
+    delete process.env.AGENTARTS_MEMORY_DATA_ENDPOINT
+    await stub.close()
+  }
 })
 
 test('recall injects a memory returned by the stub data plane', async () => {

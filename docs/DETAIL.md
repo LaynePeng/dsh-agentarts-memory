@@ -16,9 +16,24 @@ plugin installs from the repository with no build step and no dependency:
 | append messages | `POST /v1/core/spaces/{space_id}/sessions/{session_id}/messages` |
 
 Authentication is `Authorization: Bearer <api key>`; no request signing is
-involved on the data plane. The base URL resolves in this order: the `endpoint`
-config, then `$AGENTARTS_MEMORY_DATA_ENDPOINT`, then
-`https://memory.<region>.huaweicloud-agentarts.com`.
+involved on the data plane, so `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` are
+not needed.
+
+Deployment coordinates resolve from the **environment first**, then the bundle
+patch row as a fallback: `AGENTARTS_MEMORY_SPACE_ID` (space),
+`HUAWEICLOUD_SDK_REGION` → `HUAWEICLOUD_REGION` → `OS_REGION_NAME` (region,
+default `cn-southwest-2`), `AGENTARTS_MEMORY_DATA_ENDPOINT` (base URL override,
+default `https://memory.<region>.huaweicloud-agentarts.com`),
+`AGENTARTS_MEMORY_USER_ID` (`actor_id`, default `dsh-user`) and
+`AGENTARTS_MEMORY_RERANK` (search reranking, default on). These are the same
+names the AgentArts memory toolkit uses, so one export configures every
+integration.
+
+`actor_id` is the recall filter that matters most: it **must equal the actor id
+used when the memories were written**, otherwise search returns HTTP 200 with
+zero records and no error. The default `dsh-user` is consistent for
+recall + capture within this plugin, but a deployment that writes memory through
+another integration has to export `AGENTARTS_MEMORY_USER_ID` to match it.
 
 ## Switch semantics
 

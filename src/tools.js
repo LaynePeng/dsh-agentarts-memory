@@ -48,7 +48,7 @@ export function toolFailure(error) {
   if (error instanceof GatewayError) {
     if (error.code === 'unconfigured') {
       return new Error(
-        `AgentArts memory is not configured: ${error.message}. Set spaceId in the plugin config and the API key in the environment.`,
+        `AgentArts memory is not configured: ${error.message}. Export AGENTARTS_MEMORY_SPACE_ID and HUAWEICLOUD_SDK_MEMORY_API_KEY.`,
       )
     }
     return new Error(error.message)

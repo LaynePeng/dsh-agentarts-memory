@@ -19,15 +19,25 @@ conversation.
 
 ## Requirements
 
-A Huawei Cloud AgentArts **memory space** (`space_id`) and its **data-plane API
-key**. Create the space in *AgentArts console → 开发中心 → 组件库 → 记忆库*.
+A Huawei Cloud AgentArts **memory space** and its **data-plane API key**, both
+supplied as environment variables to the process that runs DSH. This is the same
+environment contract as the AgentArts memory toolkit (`agentarts-sdk`
+`assets/toolkit/plugins/memory`), so one export configures the DSH plugin, the
+MCP server and the hook scripts:
 
-Nothing else. No SDK checkout, no build step, no npm dependencies — the
-data-plane client is part of the plugin. (The official
-`@huaweicloud/agentarts-sdk` cannot be a dependency here: its `package.json`
-carries a `workspace:*` agentidentity dependency, which pnpm refuses through a
-`file:` specifier, so a git-installed copy of the plugin would have nothing to
-resolve.)
+| Variable | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `HUAWEICLOUD_SDK_MEMORY_API_KEY` | ✅ | data-plane API key (Bearer auth) | — |
+| `AGENTARTS_MEMORY_SPACE_ID` | ✅ | memory space id | — |
+| `HUAWEICLOUD_SDK_REGION` | | region; also reads `HUAWEICLOUD_REGION`, `OS_REGION_NAME` | `cn-southwest-2` |
+| `AGENTARTS_MEMORY_DATA_ENDPOINT` | | data-plane URL override | `https://memory.{region}.huaweicloud-agentarts.com` |
+| `AGENTARTS_MEMORY_USER_ID` | ⚠️ | `actor_id`; **must equal the writer's actor id**, otherwise recall returns empty results with no error | `dsh-user` |
+| `AGENTARTS_MEMORY_RERANK` | | search reranking: `1`/`true` on, `0`/`false` off | on |
+
+`HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` are **not** used: the data plane
+authenticates with the API key only and does no request signing. No SDK
+checkout, build step or npm dependency is needed — the data-plane client is part
+of the plugin.
 
 ## Install
 
@@ -39,29 +49,35 @@ Plugins → Add plugin → github:LaynePeng/dsh-agentarts-memory
 
 or, from a local checkout, pick the directory in the same dialog.
 
-Then set the API key in the environment of the process that runs DSH:
+Then export the space id and the API key in the environment of the process that
+runs DSH:
 
 ```sh
+export AGENTARTS_MEMORY_SPACE_ID="<space id>"
 export HUAWEICLOUD_SDK_MEMORY_API_KEY="<data-plane api key>"
 ```
 
 ## Configure
 
-Edit the row in your profile's `cordis.patch.yml`:
+Nothing in the bundle patch is needed for a normal deployment — export the
+variables above and the plugin is ready. The row below only carries the
+behaviour switches, plus optional fallbacks for local runs **without** the
+environment variables (environment wins whenever it is set):
 
 ```yaml
 - id: dsh-agentarts-memory
   name: '@laynepeng/dsh-agentarts-memory'
   config:
     enabled: true
-    spaceId: '<your space id>'
+    spaceId: ''                  # fallback only; prefer $AGENTARTS_MEMORY_SPACE_ID
     apiKeyEnv: HUAWEICLOUD_SDK_MEMORY_API_KEY
-    region: cn-southwest-2
-    endpoint: ''                 # empty: $AGENTARTS_MEMORY_DATA_ENDPOINT, else the region default
-    actorId: dsh-user
+    region: ''                   # fallback only; prefer $HUAWEICLOUD_SDK_REGION
+    endpoint: ''                 # fallback only; prefer $AGENTARTS_MEMORY_DATA_ENDPOINT
+    actorId: ''                  # fallback only; prefer $AGENTARTS_MEMORY_USER_ID
     assistantId: dsh
     strategyId: ''               # leave empty unless your space requires one
     timeoutMs: 5000
+    rerank: true                 # fallback; prefer $AGENTARTS_MEMORY_RERANK
     recall:
       enabled: true
       topK: 5

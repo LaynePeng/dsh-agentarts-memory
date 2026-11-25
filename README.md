@@ -44,6 +44,11 @@ conversation.
 Plugins → Add plugin → pick this directory
 ```
 
+The package also installs straight from the repository
+(`github:LaynePeng/dsh-agentarts-memory`, no build step — `index.js` is the
+entry). A git install has no sibling `agentarts-sdk-js` checkout, so point the
+SDK explicitly there with `sdkPath` or `$AGENTARTS_MEMORY_SDK_PATH`.
+
 Then set the API key in the environment of the process that runs DSH:
 
 ```sh

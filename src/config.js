@@ -9,45 +9,6 @@
  * @module dsh-agentarts-memory/config
  */
 
-import { existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-
-/** Package subpath of the AgentArts Memory SDK entry point. */
-export const SDK_PACKAGE_SUBPATH = '@huaweicloud/agentarts-sdk/sdk/memory'
-
-/** Env var naming an explicit SDK entry point (path or specifier). */
-export const SDK_PATH_ENV = 'AGENTARTS_MEMORY_SDK_PATH'
-
-/** Relative location of a sibling `agentarts-sdk-js` checkout, from this module. */
-const SDK_SIBLING = '../../agentarts-sdk-js/packages/agentarts-sdk/dist/sdk/memory/index.js'
-
-/**
- * Resolve the SDK entry point without baking a machine-specific path into the
- * package, in priority order:
- *
- * 1. the `sdkPath` config value,
- * 2. `$AGENTARTS_MEMORY_SDK_PATH`,
- * 3. a sibling `agentarts-sdk-js` checkout next to this package (if it exists),
- * 4. the bare package subpath, which resolves when the SDK is installed as a
- *    dependency of the profile.
- *
- * @param {string} [configured] - the `sdkPath` config value
- * @param {Record<string, string|undefined>} [env] - environment source
- * @returns {string}
- */
-export function resolveSdkPath(configured, env = process.env) {
-  const explicit = asString(configured)
-  if (explicit !== '') return explicit
-
-  const fromEnv = asString(env[SDK_PATH_ENV])
-  if (fromEnv !== '') return fromEnv
-
-  const sibling = fileURLToPath(new URL(SDK_SIBLING, import.meta.url))
-  if (existsSync(sibling)) return sibling
-
-  return SDK_PACKAGE_SUBPATH
-}
-
 /** Builtin memory strategies accepted by the AgentArts memory backend. */
 export const STRATEGY_TYPES = ['semantic', 'episodic', 'user_preference', 'summary', 'procedural']
 
@@ -84,12 +45,12 @@ export function resolveConfig(raw) {
     spaceId: asString(r.spaceId),
     apiKeyEnv: asString(r.apiKeyEnv) || DEFAULT_API_KEY_ENV,
     region: asString(r.region) || 'cn-southwest-2',
+    // Empty: use $AGENTARTS_MEMORY_DATA_ENDPOINT, else the region default.
     endpoint: asString(r.endpoint),
     actorId: asString(r.actorId) || 'dsh-user',
     assistantId: asString(r.assistantId) || 'dsh',
     strategyId: asString(r.strategyId),
     strategyType: asString(r.strategyType) || 'semantic',
-    sdkPath: resolveSdkPath(r.sdkPath),
     timeoutMs: asNumber(r.timeoutMs, 5000, { min: 100, max: 120000 }),
     recall: {
       enabled: asBool(recall.enabled, true),

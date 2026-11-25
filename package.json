@@ -1,7 +1,7 @@
 {
   "name": "@laynepeng/dsh-agentarts-memory",
-  "version": "0.1.0",
-  "description": "Huawei Cloud AgentArts Memory for DeepSeek Harness: semantic cross-session recall over the AgentArts Memory data plane, with independent switches for tools, recall injection and capture",
+  "version": "0.2.0",
+  "description": "Huawei Cloud AgentArts Memory for DeepSeek Harness: switchable semantic recall, memory tools and post-session capture. Self-contained data-plane client, no build step, no dependencies.",
   "private": true,
   "type": "module",
   "license": "MIT",

@@ -10,11 +10,11 @@
  * | `recall.enabled`  | automatic relevance-ranked recall on every agent step     |
  * | `capture.enabled` | push a finished session's turns for platform extraction    |
  *
- * The plugin imports no `@deepseek-ai/*` package and has no npm dependencies:
- * the AgentArts Memory SDK is loaded at runtime from the path in `sdkPath`.
- * That keeps installation to "point Plugin Manager at this directory" and
- * avoids the SDK's `workspace:*` dependency, which pnpm refuses to install
- * through a `file:` specifier.
+ * The plugin imports neither `@deepseek-ai/*` nor `@huaweicloud/agentarts-sdk`:
+ * it carries its own data-plane client (`src/gateway.js`). That is what makes a
+ * `git` install usable with no build step and no extra setup — the official SDK
+ * cannot be a dependency here because its `package.json` carries a
+ * `workspace:*` agentidentity dependency, which pnpm refuses through `file:`.
  *
  * @module @laynepeng/dsh-agentarts-memory
  */
@@ -127,7 +127,7 @@ function applyStatusCommand(ctx, config, readiness, gateway) {
         `switches: ${describeSwitches(config)}`,
         `space: ${config.spaceId === '' ? '(not set)' : config.spaceId} · region: ${config.region} · actor: ${config.actorId}`,
         `status: ${readiness.ok ? 'ready' : `inactive — ${readiness.reason ?? 'not configured'}`}`,
-        `sdk: ${config.sdkPath}`,
+        `endpoint: ${gateway.baseUrl}`,
       ]
       return { kind: 'success', text: lines.join('\n') }
     },

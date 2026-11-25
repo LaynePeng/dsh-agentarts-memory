@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { checkReady, describeSwitches, resolveConfig, resolveSdkPath, STRATEGY_TYPES } from '../src/config.js'
+import { checkReady, describeSwitches, resolveConfig, STRATEGY_TYPES } from '../src/config.js'
 
 test('resolveConfig fills every default', () => {
   const config = resolveConfig(undefined)
@@ -70,17 +70,6 @@ test('describeSwitches lists all four switches', () => {
 
 test('strategy types match the backend vocabulary', () => {
   assert.deepEqual(STRATEGY_TYPES, ['semantic', 'episodic', 'user_preference', 'summary', 'procedural'])
-})
-
-test('resolveSdkPath honours the explicit value, then the environment', () => {
-  assert.equal(resolveSdkPath('/explicit/sdk.js', {}), '/explicit/sdk.js')
-  assert.equal(resolveSdkPath('', { AGENTARTS_MEMORY_SDK_PATH: '/env/sdk.js' }), '/env/sdk.js')
-  // With no explicit value and no environment override the resolver must still
-  // return something importable rather than throwing.
-  const fallback = resolveSdkPath('', {})
-  assert.equal(typeof fallback, 'string')
-  assert.ok(fallback.length > 0)
-  assert.ok(fallback.includes('agentarts') || fallback.startsWith('file:'))
 })
 
 test('no absolute machine path is baked into the sources', async () => {

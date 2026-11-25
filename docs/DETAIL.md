@@ -2,8 +2,10 @@
 
 ## What it connects to
 
-The plugin talks to the AgentArts Memory **data plane** through the official
-SDK's `MemoryClient`, which is a thin HTTPS client over these endpoints:
+The plugin talks to the AgentArts Memory **data plane** through its own client
+(`src/gateway.js`), a thin HTTPS client over these endpoints. The request shapes
+are transcribed from the official SDK sources rather than imported, so the
+plugin installs from the repository with no build step and no dependency:
 
 | Purpose | Method + path |
 | --- | --- |
@@ -14,11 +16,9 @@ SDK's `MemoryClient`, which is a thin HTTPS client over these endpoints:
 | append messages | `POST /v1/core/spaces/{space_id}/sessions/{session_id}/messages` |
 
 Authentication is `Authorization: Bearer <api key>`; no request signing is
-involved on the data plane. The base URL defaults to
-`https://memory.<region>.huaweicloud-agentarts.com` and can be overridden with
-the `endpoint` config, which the plugin publishes as
-`AGENTARTS_MEMORY_DATA_ENDPOINT` before the SDK client is constructed (the SDK
-reads that variable at construction time).
+involved on the data plane. The base URL resolves in this order: the `endpoint`
+config, then `$AGENTARTS_MEMORY_DATA_ENDPOINT`, then
+`https://memory.<region>.huaweicloud-agentarts.com`.
 
 ## Switch semantics
 
@@ -64,6 +64,5 @@ results are not uploaded.
 - **The recall injection path is not exercised without credentials.** Its pure
   helpers (query extraction, budget, rendering, message construction) are covered
   by unit tests; the live `agent/pre-step` round-trip needs a configured space.
-- **The SDK is loaded from disk, not from npm.** The entry point resolves from
-  `sdkPath`, then `$AGENTARTS_MEMORY_SDK_PATH`, then a sibling `agentarts-sdk-js`
-  checkout, then the bare package subpath.
+- **The data-plane client is inlined.** If the backend changes a field name,
+  `src/gateway.js` is the one place to update; there is no SDK version to pin.

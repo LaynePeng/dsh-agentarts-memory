@@ -19,35 +19,25 @@ conversation.
 
 ## Requirements
 
-- A Huawei Cloud AgentArts **memory space** (`space_id`) and its **data-plane API key**.
-  Create the space in *AgentArts console → 开发中心 → 组件库 → 记忆库*.
-- The built AgentArts Memory SDK on disk. This plugin loads it at runtime instead
-  of declaring it as a dependency, because the SDK's own `package.json` carries
-  `"@huaweicloud/huaweicloud-sdk-agentidentity": "workspace:*"` and pnpm refuses
-  to install a `file:` dependency with a workspace protocol.
+A Huawei Cloud AgentArts **memory space** (`space_id`) and its **data-plane API
+key**. Create the space in *AgentArts console → 开发中心 → 组件库 → 记忆库*.
 
-  The entry point is resolved in this order, so no machine-specific path is
-  baked into the package:
-
-  1. the `sdkPath` config value,
-  2. `$AGENTARTS_MEMORY_SDK_PATH`,
-  3. a sibling `agentarts-sdk-js` checkout next to this package, if present,
-  4. the bare package subpath `@huaweicloud/agentarts-sdk/sdk/memory`.
-
-  ```sh
-  cd agentarts-sdk-js && pnpm install && pnpm --filter @huaweicloud/agentarts-sdk build
-  ```
+Nothing else. No SDK checkout, no build step, no npm dependencies — the
+data-plane client is part of the plugin. (The official
+`@huaweicloud/agentarts-sdk` cannot be a dependency here: its `package.json`
+carries a `workspace:*` agentidentity dependency, which pnpm refuses through a
+`file:` specifier, so a git-installed copy of the plugin would have nothing to
+resolve.)
 
 ## Install
 
+From the repository — no build step, `index.js` is the entry:
+
 ```
-Plugins → Add plugin → pick this directory
+Plugins → Add plugin → github:LaynePeng/dsh-agentarts-memory
 ```
 
-The package also installs straight from the repository
-(`github:LaynePeng/dsh-agentarts-memory`, no build step — `index.js` is the
-entry). A git install has no sibling `agentarts-sdk-js` checkout, so point the
-SDK explicitly there with `sdkPath` or `$AGENTARTS_MEMORY_SDK_PATH`.
+or, from a local checkout, pick the directory in the same dialog.
 
 Then set the API key in the environment of the process that runs DSH:
 
@@ -67,7 +57,7 @@ Edit the row in your profile's `cordis.patch.yml`:
     spaceId: '<your space id>'
     apiKeyEnv: HUAWEICLOUD_SDK_MEMORY_API_KEY
     region: cn-southwest-2
-    endpoint: ''                 # empty: https://memory.<region>.huaweicloud-agentarts.com
+    endpoint: ''                 # empty: $AGENTARTS_MEMORY_DATA_ENDPOINT, else the region default
     actorId: dsh-user
     assistantId: dsh
     strategyId: ''               # leave empty unless your space requires one
@@ -112,6 +102,11 @@ plugin without touching this page.
 - **No metadata round-trip.** The AgentArts search response does not return a
   record's `metadata`, so recalled text is used as-is rather than mapped back to
   local state.
+- **The wire format is transcribed, not imported.** `src/gateway.js` implements
+  the five data-plane calls this plugin needs, with request shapes copied from
+  the SDK sources (`parts: [{ type: 'text', text }]` for messages,
+  `only_actived`/`rerank` on search). If the backend changes, that one file
+  changes.
 
 See `docs/DETAIL.md` for the API surface and the limitations this plugin does not
 solve.

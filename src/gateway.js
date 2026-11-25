@@ -1,25 +1,36 @@
 /**
- * The cloud gateway: a thin, fail-open adapter over the AgentArts Memory SDK.
+ * The AgentArts Memory data-plane client.
  *
- * Responsibilities kept here (and nowhere else):
- * - lazy client construction and API key lookup,
- * - a hard deadline per call, forwarded from the caller's abort signal,
- * - normalising the SDK's wire shapes into the two records this plugin uses,
- * - translating every failure into a {@link GatewayError} so callers can decide
- *   to degrade instead of throwing into the agent loop.
+ * This is a self-contained replacement for `@huaweicloud/agentarts-sdk`'s
+ * `MemoryClient`, restricted to the calls this plugin makes. It exists because
+ * the SDK cannot be a dependency here: its `package.json` declares
+ * `"@huaweicloud/huaweicloud-sdk-agentidentity": "workspace:*"` and pnpm
+ * refuses to install a `file:` dependency carrying a workspace protocol, so a
+ * git-installed copy of this plugin would have nothing to resolve. With the
+ * client inlined the plugin installs from the repository and runs with no
+ * build step and no extra setup beyond a space id and an API key.
  *
- * Everything is opt-in and read-mostly: `search` and `save` are the only calls
- * the tools and the recall hook need.
+ * The wire format is transcribed from the SDK sources, not guessed:
+ *
+ * | call | request |
+ * | --- | --- |
+ * | search | `POST /v1/core/spaces/{space_id}/memories/search` |
+ * | save | `POST /v1/core/spaces/{space_id}/memories` |
+ * | remove | `DELETE /v1/core/spaces/{space_id}/memories/{memory_id}` |
+ * | session | `POST /v1/core/spaces/{space_id}/sessions` |
+ * | messages | `POST /v1/core/spaces/{space_id}/sessions/{session_id}/messages` |
+ *
+ * Auth is `Authorization: Bearer <api key>`; the data plane does no request
+ * signing. Failures become {@link GatewayError} so callers can degrade instead
+ * of throwing into the agent loop.
  *
  * @module dsh-agentarts-memory/gateway
  */
 
-import { loadMemorySdk } from './sdk.js'
-
 /** Failure of one gateway call. `code` is stable and safe to branch on. */
 export class GatewayError extends Error {
   /**
-   * @param {string} code - `unconfigured` | `timeout` | `aborted` | `sdk` | `api`
+   * @param {string} code - `unconfigured` | `timeout` | `aborted` | `http` | `network`
    * @param {string} message - human readable detail
    */
   constructor(code, message) {
@@ -29,7 +40,6 @@ export class GatewayError extends Error {
   }
 }
 
-/** One normalised memory hit. */
 /**
  * @typedef {object} MemoryHit
  * @property {string} id - cloud memory record id, empty when absent
@@ -39,76 +49,53 @@ export class GatewayError extends Error {
  */
 
 /**
- * Race `promise` against a deadline and an optional abort signal.
+ * Resolve the data-plane base URL. An explicit `endpoint` wins over the
+ * environment, which wins over the region default.
  *
- * @param {Promise<any>} promise - the in-flight SDK call
- * @param {number} timeoutMs - hard deadline
- * @param {AbortSignal|undefined} signal - caller cancellation
- * @param {string} label - operation name used in error messages
- * @returns {Promise<any>}
+ * @param {{endpoint?: string, region: string}} config - resolved configuration
+ * @param {Record<string, string|undefined>} [env] - environment source
+ * @returns {string} base URL without a trailing slash
  */
-export function withDeadline(promise, timeoutMs, signal, label) {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    let timer
+export function resolveBaseUrl(config, env = process.env) {
+  const raw =
+    (typeof config.endpoint === 'string' ? config.endpoint.trim() : '') ||
+    (typeof env.AGENTARTS_MEMORY_DATA_ENDPOINT === 'string' ? env.AGENTARTS_MEMORY_DATA_ENDPOINT.trim() : '') ||
+    `memory.${config.region}.huaweicloud-agentarts.com`
 
-    const cleanup = () => {
-      if (timer !== undefined) clearTimeout(timer)
-      if (signal !== undefined && typeof signal.removeEventListener === 'function') {
-        signal.removeEventListener('abort', onAbort)
-      }
-    }
-    const settle = (fn, value) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      fn(value)
-    }
-    const onAbort = () => settle(reject, new GatewayError('aborted', `${label} aborted`))
-
-    if (signal?.aborted === true) {
-      onAbort()
-      return
-    }
-    if (signal !== undefined && typeof signal.addEventListener === 'function') {
-      signal.addEventListener('abort', onAbort, { once: true })
-    }
-    timer = setTimeout(
-      () => settle(reject, new GatewayError('timeout', `${label} exceeded ${timeoutMs}ms`)),
-      timeoutMs,
-    )
-
-    Promise.resolve(promise).then(
-      (value) => settle(resolve, value),
-      (error) => settle(reject, wrapSdkError(error, label)),
-    )
-  })
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+  return withScheme.replace(/\/+$/, '')
 }
 
 /**
- * Translate an SDK/transport failure into a {@link GatewayError}.
+ * Build the search request body. Field names and the always-present
+ * `only_actived` / `rerank` pair mirror the SDK's `MemorySearchFilter`.
  *
- * @param {unknown} error - whatever the SDK threw
- * @param {string} label - operation name used in the message
- * @returns {GatewayError}
+ * @param {{query: string, topK?: number, minScore?: number, strategyType?: string, actorId?: string, assistantId?: string}} options
+ * @returns {Record<string, unknown>}
  */
-export function wrapSdkError(error, label) {
-  if (error instanceof GatewayError) return error
-  const message = error instanceof Error ? error.message : String(error)
-  return new GatewayError('api', `${label} failed: ${message}`)
+export function buildSearchBody(options) {
+  /** @type {Record<string, unknown>} */
+  const body = { query: options.query }
+  if (options.strategyType !== undefined && options.strategyType !== '') body.strategy_type = options.strategyType
+  if (options.actorId !== undefined && options.actorId !== '') body.actor_id = options.actorId
+  if (options.assistantId !== undefined && options.assistantId !== '') body.assistant_id = options.assistantId
+  if (options.topK !== undefined) body.top_k = options.topK
+  if (options.minScore !== undefined) body.min_score = options.minScore
+  body.only_actived = false
+  body.rerank = true
+  return body
 }
 
 /**
- * Pull our two fields out of one search result, tolerating both wire shapes the
+ * Pull our fields out of one search result, tolerating both wire shapes the
  * backend has been seen to use (`{record, score}` and a flat record).
  *
- * @param {unknown} raw - one entry of `MemorySearchResponse.results`
+ * @param {unknown} raw - one entry of the search response
  * @returns {MemoryHit}
  */
 export function normalizeHit(raw) {
   const holder = raw !== null && typeof raw === 'object' ? raw : {}
-  const record =
-    holder.record !== null && typeof holder.record === 'object' ? holder.record : holder
+  const record = holder.record !== null && typeof holder.record === 'object' ? holder.record : holder
   const score = typeof holder.score === 'number' && Number.isFinite(holder.score) ? holder.score : 0
 
   const content =
@@ -133,12 +120,30 @@ export function normalizeHit(raw) {
   }
 }
 
+/**
+ * Normalise a search response envelope (`{records:[{record,score}]}` or
+ * `{results:[…]}`) into hits, dropping entries with no text.
+ *
+ * @param {unknown} payload - parsed response body
+ * @returns {MemoryHit[]}
+ */
+export function normalizeSearchResponse(payload) {
+  const data = payload !== null && typeof payload === 'object' ? payload : {}
+  let entries = []
+  if (Array.isArray(data.records)) {
+    entries = data.records.map((record) =>
+      record !== null && typeof record === 'object' ? { record: record.record, score: record.score } : record,
+    )
+  } else if (Array.isArray(data.results)) {
+    entries = data.results
+  }
+  return entries.map(normalizeHit).filter((hit) => hit.content !== '')
+}
+
 /** The memory gateway. One instance per plugin activation. */
 export class MemoryGateway {
   #config
   #env
-  #client
-  #closing = false
 
   /**
    * @param {object} config - resolved configuration (see `resolveConfig`)
@@ -154,45 +159,82 @@ export class MemoryGateway {
     return this.#env[this.#config.apiKeyEnv] ?? ''
   }
 
+  /** Data-plane base URL for this gateway. */
+  get baseUrl() {
+    return resolveBaseUrl(this.#config, this.#env)
+  }
+
   /**
-   * Create (and memoize) the SDK client.
+   * One HTTP call, with the deadline and the caller's cancellation both wired
+   * into `fetch` so an abandoned request is really aborted.
    *
-   * @returns {Promise<{client: object, mod: object}>}
+   * @param {string} method - HTTP method
+   * @param {string} path - path beginning with `/`
+   * @param {{body?: unknown, signal?: AbortSignal, label: string}} options
+   * @returns {Promise<any>} parsed JSON body, `{}` for 204, or `{response}` for non-JSON
    */
-  async #ensureClient() {
-    if (this.#client !== undefined) return this.#client
+  async request(method, path, options) {
     if (this.apiKey === '') {
       throw new GatewayError('unconfigured', `environment variable ${this.#config.apiKeyEnv} is empty`)
     }
-    if (this.#config.spaceId === '') {
-      throw new GatewayError('unconfigured', 'spaceId is not set')
-    }
 
-    let mod
+    const url = `${this.baseUrl}${path}`
+    const timeout = AbortSignal.timeout(this.#config.timeoutMs)
+    const signal =
+      options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout])
+
+    let response
     try {
-      mod = await loadMemorySdk(this.#config.sdkPath)
+      response = await fetch(url, {
+        method,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal,
+      })
     } catch (error) {
-      throw new GatewayError(
-        'sdk',
-        `cannot load the AgentArts Memory SDK from ${this.#config.sdkPath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
+      if (error?.name === 'TimeoutError') {
+        throw new GatewayError('timeout', `${options.label} exceeded ${this.#config.timeoutMs}ms`)
+      }
+      if (error?.name === 'AbortError') {
+        throw new GatewayError('aborted', `${options.label} aborted`)
+      }
+      throw new GatewayError('network', `${options.label} failed: ${error instanceof Error ? error.message : String(error)}`)
     }
 
-    // The SDK derives its data-plane base URL from the environment at
-    // construction time, so a private or custom endpoint must be published
-    // before the client exists.
-    if (this.#config.endpoint !== '' && (this.#env.AGENTARTS_MEMORY_DATA_ENDPOINT ?? '') === '') {
-      this.#env.AGENTARTS_MEMORY_DATA_ENDPOINT = this.#config.endpoint
+    if (response.status === 204) return {}
+
+    if (!response.ok) {
+      let code = 'UNKNOWN_ERROR'
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (typeof payload?.error_code === 'string') code = payload.error_code
+        if (typeof payload?.error_msg === 'string') message = payload.error_msg
+      } catch {
+        // A non-JSON error body keeps the HTTP status message.
+      }
+      throw new GatewayError('http', `${options.label} failed: [${code}] ${message}`)
     }
 
-    const client = new mod.MemoryClient({
-      apiKey: this.apiKey,
-      regionName: this.#config.region,
-    })
-    this.#client = { client, mod }
-    return this.#client
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.startsWith('application/json')) {
+      try {
+        return await response.json()
+      } catch (error) {
+        throw new GatewayError('network', `${options.label} returned unparseable JSON: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    return { response: await response.text() }
+  }
+
+  /** The space path prefix every call uses. */
+  #spacePath() {
+    const spaceId = String(this.#config.spaceId ?? '').trim()
+    if (spaceId === '') throw new GatewayError('unconfigured', 'spaceId is not set')
+    return `/v1/core/spaces/${encodeURIComponent(spaceId)}`
   }
 
   /**
@@ -203,27 +245,20 @@ export class MemoryGateway {
    * @returns {Promise<MemoryHit[]>}
    */
   async search(query, options = {}) {
-    const { client, mod } = await this.#ensureClient()
-    const { topK, minScore, strategyType, signal } = options
-
-    const filters = new mod.MemorySearchFilter({
+    const body = buildSearchBody({
       query,
-      topK: topK ?? this.#config.recall.topK,
-      minScore: minScore ?? this.#config.recall.minScore,
+      topK: options.topK ?? this.#config.recall.topK,
+      minScore: options.minScore ?? this.#config.recall.minScore,
+      strategyType: options.strategyType,
       actorId: this.#config.actorId,
       assistantId: this.#config.assistantId,
-      ...(typeof strategyType === 'string' && strategyType !== '' ? { strategyType } : {}),
     })
-
-    const response = await withDeadline(
-      client.searchMemories(this.#config.spaceId, filters),
-      this.#config.timeoutMs,
-      signal,
-      'memory search',
-    )
-
-    const results = Array.isArray(response?.results) ? response.results : []
-    return results.map(normalizeHit).filter((hit) => hit.content !== '')
+    const payload = await this.request('POST', `${this.#spacePath()}/memories/search`, {
+      body,
+      signal: options.signal,
+      label: 'memory search',
+    })
+    return normalizeSearchResponse(payload)
   }
 
   /**
@@ -233,25 +268,23 @@ export class MemoryGateway {
    * @returns {Promise<{id: string, content: string}>}
    */
   async save(input) {
-    const { client, mod } = await this.#ensureClient()
     const content = String(input?.content ?? '').trim()
-    if (content === '') throw new GatewayError('api', 'content must not be empty')
+    if (content === '') throw new GatewayError('http', 'content must not be empty')
 
-    const request = new mod.CreateMemoryRequest({
+    /** @type {Record<string, unknown>} */
+    const body = {
       content,
-      strategyType: input?.strategyType ?? this.#config.strategyType,
-      strategyId: this.#config.strategyId,
-      actorId: this.#config.actorId,
-      assistantId: this.#config.assistantId,
-      ...(input?.metadata !== undefined ? { metadata: input.metadata } : {}),
-    })
+      strategy_type: input?.strategyType ?? this.#config.strategyType,
+    }
+    if (this.#config.strategyId !== '') body.strategy_id = this.#config.strategyId
+    if (this.#config.actorId !== '') body.actor_id = this.#config.actorId
+    if (this.#config.assistantId !== '') body.assistant_id = this.#config.assistantId
+    if (input?.metadata !== undefined) body.metadata = input.metadata
 
-    const created = await withDeadline(
-      client.createMemory(this.#config.spaceId, request),
-      this.#config.timeoutMs,
-      undefined,
-      'memory save',
-    )
+    const created = await this.request('POST', `${this.#spacePath()}/memories`, {
+      body,
+      label: 'memory save',
+    })
     return { id: String(created?.id ?? ''), content: String(created?.content ?? content) }
   }
 
@@ -262,13 +295,9 @@ export class MemoryGateway {
    * @returns {Promise<void>}
    */
   async remove(id) {
-    const { client } = await this.#ensureClient()
-    await withDeadline(
-      client.deleteMemory(this.#config.spaceId, String(id)),
-      this.#config.timeoutMs,
-      undefined,
-      'memory delete',
-    )
+    await this.request('DELETE', `${this.#spacePath()}/memories/${encodeURIComponent(String(id))}`, {
+      label: 'memory delete',
+    })
   }
 
   /**
@@ -279,53 +308,39 @@ export class MemoryGateway {
    * @returns {Promise<number>} number of messages accepted
    */
   async pushMessages(sessionId, messages) {
-    const { client, mod } = await this.#ensureClient()
+    const id = String(sessionId ?? '').trim()
+    if (id === '') throw new GatewayError('http', 'session id must not be empty')
     if (!Array.isArray(messages) || messages.length === 0) return 0
 
-    const id = String(sessionId ?? '').trim()
-    if (id === '') throw new GatewayError('api', 'session id must not be empty')
+    const space = this.#spacePath()
+
+    /** @type {Record<string, unknown>} */
+    const sessionBody = { id }
+    if (this.#config.actorId !== '') sessionBody.actor_id = this.#config.actorId
+    if (this.#config.assistantId !== '') sessionBody.assistant_id = this.#config.assistantId
 
     try {
-      await withDeadline(
-        client.createMemorySession(this.#config.spaceId, id, this.#config.actorId, this.#config.assistantId),
-        this.#config.timeoutMs,
-        undefined,
-        'memory session create',
-      )
+      await this.request('POST', `${space}/sessions`, { body: sessionBody, label: 'memory session create' })
     } catch (error) {
-      // A session that already exists is the normal case after the first turn;
-      // only a non-conflict failure is worth reporting.
+      // A session that already exists is the normal case after the first
+      // capture; only a genuine failure is worth reporting.
       const message = error instanceof Error ? error.message : String(error)
-      if (!/exist|conflict|duplicate|409/i.test(message)) throw wrapSdkError(error, 'memory session create')
+      if (error?.code !== 'http' || !/exist|conflict|duplicate|409/i.test(message)) throw error
     }
 
-    const textMessages = messages.map(
-      (message) => new mod.TextMessage({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content }),
-    )
+    const batch = await this.request('POST', `${space}/sessions/${encodeURIComponent(id)}/messages`, {
+      body: {
+        // `parts`, not `content`: the SDK's TextMessage.toDict shape.
+        messages: messages.map((message) => ({
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          parts: [{ type: 'text', text: message.content }],
+        })),
+        is_force_extract: true,
+        idempotency_key: id,
+      },
+      label: 'memory message push',
+    })
 
-    const batch = await withDeadline(
-      client.addMessages(this.#config.spaceId, id, textMessages, {
-        idempotencyKey: id,
-        isForceExtract: true,
-      }),
-      this.#config.timeoutMs,
-      undefined,
-      'memory message push',
-    )
-    return Array.isArray(batch?.items) ? batch.items.length : textMessages.length
-  }
-
-  /** Release the underlying HTTP client, best effort. */
-  async close() {
-    if (this.#closing) return
-    this.#closing = true
-    const held = this.#client
-    this.#client = undefined
-    if (held === undefined) return
-    try {
-      await held.client.close()
-    } catch {
-      // Closing a client that never opened a socket is not an error worth surfacing.
-    }
+    return Array.isArray(batch?.messages) ? batch.messages.length : messages.length
   }
 }
